@@ -158,13 +158,9 @@ async def main():
         return
 
     db = redis.from_url(REDIS_URL, socket_timeout=30)
-    print("🔄 Checking 'recap_events_daily' for new fantasy wire events...")
+    print("🔄 Checking 'recap_events_daily' for fantasy wire events...")
 
     raw_daily = await db.lrange(QUEUE_NAME, 0, -1)
-    if not raw_daily:
-        print("ℹ️ No new events in 'recap_events_daily' since last recap run. Exiting cleanly.")
-        await db.aclose()
-        return
 
     events = []
     for item in raw_daily:
@@ -173,6 +169,55 @@ async def main():
             events.append(json.loads(decoded))
         except Exception:
             pass
+
+    # If the daily queue has fewer than 20 items (e.g., right after an earlier run cleared it),
+    # automatically blend in the latest items from recap_events_weekly and recent draft:* keys
+    draft_summaries = []
+    if len(events) < 20:
+        print(f"ℹ️ Only {len(events)} items in daily queue. Blending in recent weekly/draft items for a full recap...")
+        raw_wk = await db.lrange("recap_events_weekly", -60, -1)
+        if not raw_wk:
+            raw_wk = await db.lrange("recap_events_weekly_backup", -60, -1)
+        for item in raw_wk:
+            try:
+                decoded = item.decode("utf-8") if isinstance(item, bytes) else str(item)
+                events.append(json.loads(decoded))
+            except Exception:
+                pass
+
+        cursor = b"0"
+        draft_keys = []
+        while cursor:
+            cursor, keys = await db.scan(cursor=cursor, match="draft:*", count=100)
+            draft_keys.extend(keys)
+            if cursor == b"0" or cursor == 0:
+                break
+        seen_drafts = set()
+        for k in draft_keys:
+            k_str = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+            if k_str.startswith(("draft:wk_", "draft:dy_", "draft:pt_", "draft:rollup_")):
+                continue
+            raw_val = await db.get(k)
+            if not raw_val:
+                continue
+            val_str = raw_val.decode("utf-8") if isinstance(raw_val, bytes) else str(raw_val)
+            try:
+                parsed = json.loads(val_str)
+                txt = parsed.get("text", "") if isinstance(parsed, dict) else str(parsed)
+            except Exception:
+                txt = val_str
+            if not txt or "Practice/Injury Rollup" in txt or NON_FANTASY_RE.search(txt):
+                continue
+            clean_draft = re.sub(r"\n+\(via [^)]+\)$", "", txt.strip())
+            one_line = " | ".join(ln.strip() for ln in clean_draft.split("\n") if ln.strip())
+            if one_line and one_line not in seen_drafts:
+                seen_drafts.add(one_line)
+                draft_summaries.append(one_line)
+
+    if not events and not draft_summaries:
+        print("ℹ️ No fantasy events found. Exiting cleanly.")
+        await db.aclose()
+        return
 
     grouped = {}
     for e in events:
@@ -190,14 +235,11 @@ async def main():
             if entry not in grouped[tm][plr]:
                 grouped[tm][plr].append(entry)
 
-    if not grouped:
-        print("ℹ️ Only non-fantasy/IDP/OL events were in the queue. Clearing queue and exiting.")
-        await db.delete(QUEUE_NAME)
-        await db.aclose()
-        return
-
-    payload_data = {"fantasy_skill_players_by_team": grouped}
-    print(f"✅ Filtered to fantasy skill players across {len(grouped)} teams. Dispatching to Gemini 4 Argon...")
+    payload_data = {
+        "fantasy_skill_players_by_team": grouped,
+        "additional_skill_player_alerts": draft_summaries[:50]
+    }
+    print(f"✅ Filtered to fantasy skill players ({len(grouped)} teams + {len(draft_summaries[:50])} drafts). Dispatching to Gemini 4 Argon...")
 
     body = {
         "systemInstruction": {"parts": [{"text": PROMPT}]},
@@ -277,7 +319,7 @@ async def main():
             await fetch(session, "POST", WEBHOOK, json={"embeds": embeds_to_send[:3]})
             print(f"✅ Posted {len(embeds_to_send[:3])} Recap social cards to Discord!")
 
-        if all_sent:
+        if all_sent and raw_daily:
             await db.delete(QUEUE_NAME)
             print("✅ Recap posted successfully and 'recap_events_daily' cleared for the next window!")
 
@@ -285,4 +327,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-# === END OF PART 2 === 
+# === END OF PART 2 ===
