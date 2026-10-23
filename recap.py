@@ -1,4 +1,8 @@
-# === START OF PART 1 ===
+################################################################################
+# 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 #
+#                              START OF PART 1                                 #
+# 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 #
+################################################################################
 import os, re, sys, json, hashlib, asyncio, aiohttp
 import redis.asyncio as redis
 from urllib.parse import quote
@@ -7,8 +11,19 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 print(">>> BOOTING NFL DAILY / PRIMETIME RECAP: GEMINI 4 ARGON <<<")
 
-KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+KEY = (
+    os.environ.get("GEMINI_API_KEY")
+    or os.environ.get("GOOGLE_API_KEY")
+    or os.environ.get("API_KEY")
+    or ""
+).strip()
+WEBHOOK = (
+    os.environ.get("DISCORD_WEBHOOK_URL")
+    or os.environ.get("RECAP_WEBHOOK_URL")
+    or os.environ.get("DISCORD_WEBHOOK")
+    or os.environ.get("WEBHOOK_URL")
+    or ""
+).strip()
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 SERVER_URL = os.environ.get("SERVER_URL", "https://editor-production-fd79.up.railway.app").strip().rstrip("/")
 if "localhost" in SERVER_URL:
@@ -119,9 +134,17 @@ def chunk_for_discord(text, max_len=1900):
     if current_lines:
         chunks.append("\n".join(current_lines).strip())
     return chunks
-# === END OF PART 1 ===
-# === START OF PART 2 ===
-def format_card_post(header, raw_bullets, max_chars=265):
+################################################################################
+# 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 #
+#                               END OF PART 1                                  #
+# 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 #
+################################################################################
+################################################################################
+# 🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦 #
+#                              START OF PART 2                                 #
+# 🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦 #
+################################################################################
+def format_card_post(header, raw_bullets, max_chars=235):
     lines = []
     for b in raw_bullets:
         clean_ln = str(b).replace("#", "").replace("**", "").strip()
@@ -131,8 +154,8 @@ def format_card_post(header, raw_bullets, max_chars=265):
         if any(clean_ln.lower().startswith(w) for w in ["none", "no updates", "no news", "n/a", "nothing"]):
             continue
         bullet_ln = f"• {clean_ln}"
-        if len(bullet_ln) > 65:
-            bullet_ln = bullet_ln[:62].strip() + "..."
+        if len(bullet_ln) > 62:
+            bullet_ln = bullet_ln[:59].strip() + "..."
         lines.append(bullet_ln)
 
     if not lines:
@@ -154,7 +177,8 @@ def format_card_post(header, raw_bullets, max_chars=265):
 
 async def main():
     if not KEY or not WEBHOOK:
-        print("❌ Missing API keys or Webhook URL. Exiting.")
+        env_keys = [k for k in os.environ.keys() if "KEY" in k or "WEBHOOK" in k or "DISCORD" in k or "GEMINI" in k]
+        print(f"❌ Missing env vars -> GEMINI_API_KEY={bool(KEY)}, DISCORD_WEBHOOK_URL={bool(WEBHOOK)} | Found matching keys: {env_keys}")
         return
 
     db = redis.from_url(REDIS_URL, socket_timeout=30)
@@ -170,8 +194,6 @@ async def main():
         except Exception:
             pass
 
-    # If the daily queue has fewer than 20 items (e.g., right after an earlier run cleared it),
-    # automatically blend in the latest items from recap_events_weekly and recent draft:* keys
     draft_summaries = []
     if len(events) < 20:
         print(f"ℹ️ Only {len(events)} items in daily queue. Blending in recent weekly/draft items for a full recap...")
@@ -292,7 +314,7 @@ async def main():
                 continue
 
             header, color = CARD_STYLES[cat_key]
-            social_post = format_card_post(header, raw_bullets)
+            social_post = format_card_post(header, raw_bullets, max_chars=235)
             if not social_post:
                 continue
 
@@ -300,8 +322,16 @@ async def main():
             await db.set(f"draft:{cid}", social_post, ex=259200)
 
             pub_link = f"{SERVER_URL}/post?id={quote(cid)}"
-            tw_link = f"https://twitter.com/intent/tweet?text={quote(social_post)}"
-            bs_link = f"https://bsky.app/intent/compose?text={quote(social_post)}"
+            # Replace bullet symbols with '-' inside URL intent links so URL-encoding stays compact (<350 chars)
+            intent_txt = social_post.replace("•", "-")
+            tw_link = f"https://twitter.com/intent/tweet?text={quote(intent_txt)}"
+            bs_link = f"https://bsky.app/intent/compose?text={quote(intent_txt)}"
+
+            field_val = f"[🚀 1-Tap Publish]({pub_link}) | [🐦 Twitter]({tw_link}) | [🦋 Bsky]({bs_link})"
+            if len(field_val) > 1024:
+                field_val = f"[🚀 1-Tap Publish]({pub_link}) | [🐦 Twitter]({tw_link})"
+            if len(field_val) > 1024:
+                field_val = f"[🚀 1-Tap Publish]({pub_link})"
 
             embeds_to_send.append({
                 "title": header,
@@ -309,15 +339,19 @@ async def main():
                 "color": color,
                 "fields": [{
                     "name": "📲 1-Tap Social Actions",
-                    "value": f"[🚀 1-Tap Publish]({pub_link}) | [🐦 Twitter]({tw_link}) | [🦋 Bsky]({bs_link})",
+                    "value": field_val,
                     "inline": False
                 }]
             })
 
         if embeds_to_send:
-            await asyncio.sleep(1.5)
-            await fetch(session, "POST", WEBHOOK, json={"embeds": embeds_to_send[:3]})
-            print(f"✅ Posted {len(embeds_to_send[:3])} Recap social cards to Discord!")
+            sent_cards = 0
+            for emb in embeds_to_send[:3]:
+                await asyncio.sleep(1.2)
+                res_emb = await fetch(session, "POST", WEBHOOK, json={"embeds": [emb]})
+                if res_emb is not None:
+                    sent_cards += 1
+            print(f"✅ Posted {sent_cards}/{len(embeds_to_send[:3])} Recap social cards to Discord!")
 
         if all_sent and raw_daily:
             await db.delete(QUEUE_NAME)
@@ -327,4 +361,8 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-# === END OF PART 2 ===
+################################################################################
+# 🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦 #
+#                               END OF PART 2                                  #
+# 🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦🟦 #
+################################################################################
